@@ -6,14 +6,12 @@ require "uri"
 require "logstash/plugin_mixins/http_client"
 require "zlib"
 
-class LogStash::Outputs::Http < LogStash::Outputs::Base
+class LogStash::Outputs::KafkaRest < LogStash::Outputs::Base
   include LogStash::PluginMixins::HttpClient
 
   concurrency :shared
 
   attr_accessor :is_batch
-
-  VALID_METHODS = ["put", "post", "patch", "delete", "get", "head"]
 
   RETRYABLE_MANTICORE_EXCEPTIONS = [
     ::Manticore::Timeout,
@@ -23,8 +21,7 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     ::Manticore::SocketTimeout
   ]
 
-  # This output lets you send events to a
-  # generic HTTP(S) endpoint
+  # This output lets you send events to a Kafka REST proxy.
   #
   # This output will execute up to 'pool_max' requests in parallel for performance.
   # Consider this when tuning this plugin for performance.
@@ -34,25 +31,14 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   #
   # Beware, this gem does not yet support codecs. Please use the 'format' option for now.
 
-  config_name "http"
+  config_name "kafkarest"
 
   # URL to use
   config :url, :validate => :string, :required => :true
 
-  # The HTTP Verb. One of "put", "post", "patch", "delete", "get", "head"
-  config :http_method, :validate => VALID_METHODS, :required => :true
-
   # Custom headers to use
   # format is `headers => ["X-My-Header", "%{host}"]`
   config :headers, :validate => :hash, :default => {}
-
-  # Content type
-  #
-  # If not specified, this defaults to the following:
-  #
-  # * if format is "json", "application/json"
-  # * if format is "form", "application/x-www-form-urlencoded"
-  config :content_type, :validate => :string
 
   # Set this to false if you don't want this output to retry failed requests
   config :retry_failed, :validate => :boolean, :default => true
@@ -73,23 +59,20 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   #               "bar" => "%{type}"}
   config :mapping, :validate => :hash
 
-  # Set the format of the http body.
-  #
-  # If form, then the body will be the mapping (or whole event) converted
-  # into a query parameter string, e.g. `foo=bar&baz=fizz...`
-  #
-  # If message, then the body will be the result of formatting the event according to message
-  #
-  # Otherwise, the event is sent as json.
-  config :format, :validate => ["json", "json_batch", "form", "message"], :default => "json"
-
   # Set this to true if you want to enable gzip compression for your http requests
   config :http_compression, :validate => :boolean, :default => false
 
   config :message, :validate => :string
 
+  # Use value schema validation by setting a corresponding schema id.
+  config :value_schema_id, :validate => :number
+
+  # Send batches of events. Each batch of events received by the output
+  # will be sent in one request.
+  config :batch_events, :validate => :boolean, :default => true
+
   def register
-    @http_method = @http_method.to_sym
+    @http_method = "post".to_sym
 
     # We count outstanding requests with this queue
     # This queue tracks the requests to create backpressure
@@ -100,20 +83,12 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
     @requests = Array.new
 
-    if @content_type.nil?
-      case @format
-        when "form" ; @content_type = "application/x-www-form-urlencoded"
-        when "json" ; @content_type = "application/json"
-        when "json_batch" ; @content_type = "application/json"
-        when "message" ; @content_type = "text/plain"
-      end
-    end
-
-    @is_batch = @format == "json_batch"
-
+    @use_schema = @value_schema_id.nil? ? false : true
+    @content_type = @use_schema ? "application/vnd.kafka.jsonschema.v2+json" : "application/vnd.kafka.json.v2+json"
     @headers["Content-Type"] = @content_type
+    @headers["Accept"] = "application/vnd.kafka.v2+json"
 
-    validate_format!
+    @is_batch = @batch_events
 
     # Run named Timer as daemon thread
     @timer = java.util.Timer.new("HTTP Output #{self.params['id']}", true)
@@ -226,7 +201,7 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     body = event_body(event)
 
     # Send the request
-    url = @is_batch ? @url : event.sprintf(@url)
+    url = @url
     headers = @is_batch ? @headers : event_headers(event)
 
     # Compress the body and add appropriate header
@@ -304,16 +279,19 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
   # Format the HTTP body
   def event_body(event)
-    # TODO: Create an HTTP post data codec, use that here
-    if @format == "json"
-      LogStash::Json.dump(map_event(event))
-    elsif @format == "message"
-      event.sprintf(@message)
-    elsif @format == "json_batch"
-      LogStash::Json.dump(event.map {|e| map_event(e) })
+    if @is_batch
+      event = event.map {|e| map_event(e) }
+      body = {:records => event}
     else
-      encode(map_event(event))
+      event = map_event(event)
+      body = {:records => [event]}
     end
+
+    if @use_schema
+      body[:value_schema_id] = @value_schema_id
+    end
+
+    LogStash::Json.dump(body)
   end
 
   # gzip data
@@ -369,20 +347,4 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     end.join("&")
   end
 
-
-  def validate_format!
-    if @format == "message"
-      if @message.nil?
-        raise "message must be set if message format is used"
-      end
-
-      if @content_type.nil?
-        raise "content_type must be set if message format is used"
-      end
-
-      unless @mapping.nil?
-        @logger.warn "mapping is not supported and will be ignored if message format is used"
-      end
-    end
-  end
 end

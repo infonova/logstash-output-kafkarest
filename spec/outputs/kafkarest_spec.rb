@@ -1,5 +1,5 @@
 require "logstash/devutils/rspec/spec_helper"
-require "logstash/outputs/http"
+require "logstash/outputs/kafkarest"
 require "logstash/codecs/plain"
 require "thread"
 require "sinatra"
@@ -7,7 +7,7 @@ require_relative "../supports/compressed_requests"
 
 PORT = rand(65535-1024) + 1025
 
-class LogStash::Outputs::Http
+class LogStash::Outputs::KafkaRest
   attr_writer :agent
   attr_reader :request_tokens
 end
@@ -100,7 +100,7 @@ RSpec.configure do |config|
   end
 end
 
-describe LogStash::Outputs::Http do
+describe LogStash::Outputs::KafkaRest do
   # Wait for the async request to finish in this spinlock
   # Requires pool_max to be 1
 
@@ -112,8 +112,8 @@ describe LogStash::Outputs::Http do
   let(:method) { "post" }
 
   shared_examples("verb behavior") do |method|
-    let(:verb_behavior_config) { {"url" => url, "http_method" => method, "pool_max" => 1} }
-    subject { LogStash::Outputs::Http.new(verb_behavior_config) }
+    let(:verb_behavior_config) { {"url" => url, "pool_max" => 1} }
+    subject { LogStash::Outputs::KafkaRest.new(verb_behavior_config) }
 
     let(:expected_method) { method.clone.to_sym }
     let(:client) { subject.client }
@@ -133,7 +133,7 @@ describe LogStash::Outputs::Http do
       end
     end
 
-    context "performing a get" do
+    context "performing a post" do
       describe "invoking the request" do
         before do
           subject.multi_receive([event])
@@ -237,12 +237,6 @@ describe LogStash::Outputs::Http do
     end
   end
 
-  LogStash::Outputs::Http::VALID_METHODS.each do |method|
-    context "when using '#{method}'" do
-      include_examples("verb behavior", method)
-    end
-  end
-
   shared_examples("a received event") do
     before do
       TestApp.last_request = nil
@@ -295,61 +289,74 @@ describe LogStash::Outputs::Http do
       LogStash::Event.new("foo" => "bar", "baz" => "bot", "user" => "McBest")
     }
 
-    subject { LogStash::Outputs::Http.new(config) }
+    subject { LogStash::Outputs::KafkaRest.new(config) }
 
     before do
       subject.register
     end
 
-    describe "sending with the default (JSON) config" do
+    describe "sending batch with one event" do
       let(:config) {
-        base_config.merge({"url" => url, "http_method" => "post", "pool_max" => 1})
+        base_config.merge({"url" => url, "pool_max" => 1})
       }
-      let(:expected_body) { LogStash::Json.dump(event) }
-      let(:expected_content_type) { "application/json" }
+      let(:expected_body) { LogStash::Json.dump({:records => [event]}) }
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
     end
 
-    describe "sending the batch as JSON" do
+    describe "sending batch with two events" do
       let(:config) do
-        base_config.merge({"url" => url, "http_method" => "post", "format" => "json_batch"})
+        base_config.merge({"url" => url})
       end
 
-      let(:expected_body) { ::LogStash::Json.dump events }
+      let(:expected_body) { ::LogStash::Json.dump({:records => events}) }
       let(:events) { [::LogStash::Event.new("a" => 1), ::LogStash::Event.new("b" => 2)]}
-      let(:expected_content_type) { "application/json" }
-      
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
+
       include_examples("a received event")
 
     end
 
-    describe "sending the event as a form" do
+    describe "sending batch with one event and value schema id" do
       let(:config) {
-        base_config.merge({"url" => url, "http_method" => "post", "pool_max" => 1, "format" => "form"})
+        base_config.merge({"url" => url, "pool_max" => 1, "value_schema_id" => 12345})
       }
-      let(:expected_body) { subject.send(:encode, event.to_hash) }
-      let(:expected_content_type) { "application/x-www-form-urlencoded" }
+      let(:expected_body) { LogStash::Json.dump({:records => [event], :value_schema_id => 12345}) }
+      let(:expected_content_type) { "application/vnd.kafka.jsonschema.v2+json" }
 
       include_examples("a received event")
     end
 
-    describe "sending the event as a message" do
+    describe "sending no batch with one event" do
       let(:config) {
-        base_config.merge({"url" => url, "http_method" => "post", "pool_max" => 1, "format" => "message", "message" => "%{foo} AND %{baz}"})
+        base_config.merge({"url" => url, "pool_max" => 1, "batch_events" => false})
       }
-      let(:expected_body) { "#{event.get("foo")} AND #{event.get("baz")}" }
-      let(:expected_content_type) { "text/plain" }
+      let(:expected_body) { LogStash::Json.dump({:records => [event]}) }
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
+    end
+
+    describe "sending no batch with two events" do
+      let(:config) do
+        base_config.merge({"url" => url, "batch_events" => false})
+      end
+
+      let(:expected_body) { ::LogStash::Json.dump({:records => events}) }
+      let(:events) { [::LogStash::Event.new("a" => 1), ::LogStash::Event.new("b" => 2)]}
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
+
+      include_examples("a received event")
+
     end
 
     describe "sending a mapped event" do
       let(:config) {
-        base_config.merge({"url" => url, "http_method" => "post", "pool_max" => 1, "mapping" => {"blah" => "X %{foo}"} })
+        base_config.merge({"url" => url, "pool_max" => 1, "mapping" => {"blah" => "X %{foo}"} })
       }
-      let(:expected_body) { LogStash::Json.dump("blah" => "X #{event.get("foo")}") }
-      let(:expected_content_type) { "application/json" }
+      let(:expected_body) { LogStash::Json.dump({:records => [{:blah => "X #{event.get("foo")}"}]}) }
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
     end
@@ -358,7 +365,6 @@ describe LogStash::Outputs::Http do
       let(:config) {
         base_config.merge({
           "url" => url,
-          "http_method" => "post",
           "pool_max" => 1,
           "mapping" => {
             "host" => "X %{foo}",
@@ -373,16 +379,18 @@ describe LogStash::Outputs::Http do
       }
       let(:expected_body) {
         LogStash::Json.dump({
-          "host" => "X #{event.get("foo")}",
-          "event" => {
-            "user" => "Y #{event.get("user")}"
-          },
-          "arrayevent" => [{
-            "user" => "Z #{event.get("user")}"
+          :records => [{
+            :host => "X #{event.get("foo")}",
+            :event => {
+              :user => "Y #{event.get("user")}"
+            },
+            :arrayevent => [{
+              "user" => "Z #{event.get("user")}"
+            }]
           }]
         })
       }
-      let(:expected_content_type) { "application/json" }
+      let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
     end
