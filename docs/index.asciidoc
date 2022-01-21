@@ -32,7 +32,7 @@ guaranteed!
 Beware, this gem does not yet support codecs.
 
 [id="plugins-{type}s-{plugin}-options"]
-==== Http Output Configuration Options
+==== Kafka REST Output Configuration Options
 
 This plugin supports the following configuration options plus the <<plugins-{type}s-{plugin}-common-options>> described later.
 
