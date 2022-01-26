@@ -4,6 +4,67 @@ This is a plugin for [Logstash](https://github.com/elastic/logstash).
 
 It is fully free and fully open source. The license is Apache 2.0, meaning you are pretty much free to use it however you want in whatever way.
 
+## Configuration Example
+
+```
+output {
+  kafkarest {
+    url => "http://localhost:8082/topics/test"
+    value_schema_id => 12345
+  }
+}
+```
+
+## Test Setup
+
+There is a `docker-compose.yml` file which bootstraps Kafka, Zookeeper, Schema Registry and the Kafka REST Proxy.
+
+```
+docker-compose up
+```
+
+Create a `jsontest` topic with a schema:
+
+```
+curl -X POST -H "Content-Type: application/vnd.kafka.jsonschema.v2+json" -H "Accept: application/vnd.kafka.v2+json" \
+  -d '{"value_schema": "{\"type\":\"object\",\"properties\":{\"foo\":{\"type\":\"string\"}}}","records":[{"value":{"foo":"bar"}}]}' "http://localhost:8082/topics/jsontest"
+```
+
+The above command returns a `value_schema_id` which can be used in the `kafkarest` Logstash output. A simple example config could look like this:
+
+```
+input {
+  stdin {}
+}
+
+filter {
+  # The message field includes the JSON
+  prune {
+    whitelist_names => [ "message" ]
+  }
+
+  json {
+    source => "message"
+    remove_field => [ "message" ]
+  }
+}
+
+output {
+  # A JSON parsing error probably occured
+  if [message] {
+    stdout {}
+  } else {
+    kafkarest {
+      url => "http://localhost:8082/topics/jsontest"
+      value_schema_id => 1
+    }
+  }
+}
+```
+
+The Logstash `stdin` input expects a valid JSON which gets parsed accordingly in the filter section. The output sends the JSON to the Kafka REST Proxy
+with the `value_schema_id` set to 1.
+
 ## Documentation
 
 Logstash provides infrastructure to automatically generate documentation for this plugin. We use the asciidoc format to write documentation so any comments in the source code will be first converted into asciidoc and then into html. All plugin documentation are placed under one [central location](http://www.elastic.co/guide/en/logstash/current/).

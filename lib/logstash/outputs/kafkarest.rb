@@ -62,8 +62,6 @@ class LogStash::Outputs::KafkaRest < LogStash::Outputs::Base
   # Set this to true if you want to enable gzip compression for your http requests
   config :http_compression, :validate => :boolean, :default => false
 
-  config :message, :validate => :string
-
   # Use value schema validation by setting a corresponding schema id.
   config :value_schema_id, :validate => :number
 
@@ -122,11 +120,11 @@ class LogStash::Outputs::KafkaRest < LogStash::Outputs::Base
 
   def log_error_response(response, url, event)
     log_failure(
-              "Encountered non-2xx HTTP code #{response.code}",
-              :response_code => response.code,
-              :url => url,
-              :event => event
-            )
+      "Encountered non-2xx HTTP code #{response.code}",
+      :response_body => response.body,
+      :url => url,
+      :event => LogStash::Json.dump(event)
+    )
   end
 
   def send_events(events)
@@ -280,10 +278,10 @@ class LogStash::Outputs::KafkaRest < LogStash::Outputs::Base
   # Format the HTTP body
   def event_body(event)
     if @is_batch
-      event = event.map {|e| map_event(e) }
+      event = event.map {|e| {:value => map_event(e)} }
       body = {:records => event}
     else
-      event = map_event(event)
+      event = {:value => map_event(event)}
       body = {:records => [event]}
     end
 

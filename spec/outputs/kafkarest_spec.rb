@@ -299,7 +299,7 @@ describe LogStash::Outputs::KafkaRest do
       let(:config) {
         base_config.merge({"url" => url, "pool_max" => 1})
       }
-      let(:expected_body) { LogStash::Json.dump({:records => [event]}) }
+      let(:expected_body) { LogStash::Json.dump({:records => [{:value => event}]}) }
       let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
@@ -310,7 +310,7 @@ describe LogStash::Outputs::KafkaRest do
         base_config.merge({"url" => url})
       end
 
-      let(:expected_body) { ::LogStash::Json.dump({:records => events}) }
+      let(:expected_body) { ::LogStash::Json.dump({:records => events.map { |event| {:value => event} }}) }
       let(:events) { [::LogStash::Event.new("a" => 1), ::LogStash::Event.new("b" => 2)]}
       let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
@@ -322,7 +322,7 @@ describe LogStash::Outputs::KafkaRest do
       let(:config) {
         base_config.merge({"url" => url, "pool_max" => 1, "value_schema_id" => 12345})
       }
-      let(:expected_body) { LogStash::Json.dump({:records => [event], :value_schema_id => 12345}) }
+      let(:expected_body) { LogStash::Json.dump({:records => [{:value => event}], :value_schema_id => 12345}) }
       let(:expected_content_type) { "application/vnd.kafka.jsonschema.v2+json" }
 
       include_examples("a received event")
@@ -332,7 +332,7 @@ describe LogStash::Outputs::KafkaRest do
       let(:config) {
         base_config.merge({"url" => url, "pool_max" => 1, "batch_events" => false})
       }
-      let(:expected_body) { LogStash::Json.dump({:records => [event]}) }
+      let(:expected_body) { LogStash::Json.dump({:records => [{:value => event}]}) }
       let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
@@ -343,7 +343,7 @@ describe LogStash::Outputs::KafkaRest do
         base_config.merge({"url" => url, "batch_events" => false})
       end
 
-      let(:expected_body) { ::LogStash::Json.dump({:records => events}) }
+      let(:expected_body) { ::LogStash::Json.dump({:records => events.map { |event| {:value => event} }}) }
       let(:events) { [::LogStash::Event.new("a" => 1), ::LogStash::Event.new("b" => 2)]}
       let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
@@ -355,7 +355,7 @@ describe LogStash::Outputs::KafkaRest do
       let(:config) {
         base_config.merge({"url" => url, "pool_max" => 1, "mapping" => {"blah" => "X %{foo}"} })
       }
-      let(:expected_body) { LogStash::Json.dump({:records => [{:blah => "X #{event.get("foo")}"}]}) }
+      let(:expected_body) { LogStash::Json.dump({:records => [{:value => {:blah => "X #{event.get("foo")}"}}]}) }
       let(:expected_content_type) { "application/vnd.kafka.json.v2+json" }
 
       include_examples("a received event")
@@ -380,13 +380,15 @@ describe LogStash::Outputs::KafkaRest do
       let(:expected_body) {
         LogStash::Json.dump({
           :records => [{
-            :host => "X #{event.get("foo")}",
-            :event => {
-              :user => "Y #{event.get("user")}"
-            },
-            :arrayevent => [{
-              "user" => "Z #{event.get("user")}"
-            }]
+            :value => {
+              :host => "X #{event.get("foo")}",
+              :event => {
+                :user => "Y #{event.get("user")}"
+              },
+              :arrayevent => [{
+                "user" => "Z #{event.get("user")}"
+              }]
+            }
           }]
         })
       }
